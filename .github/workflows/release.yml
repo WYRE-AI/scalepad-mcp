@@ -28,16 +28,3 @@ jobs:
       image-name: ghcr.io/wyre-technology/scalepad-mcp
     secrets: inherit
 
-  deploy:
-    needs: release
-    if: needs.release.outputs.released == 'true'
-    permissions:
-      id-token: write
-      contents: read
-    uses: wyre-technology/.github/.github/workflows/mcp-server-deploy.yml@a61021de876d0fd44dac777fa90f963fea25b0c3
-    with:
-      vendor-slug: scalepad
-      image-name: ghcr.io/wyre-technology/scalepad-mcp
-      digest: ${{ needs.release.outputs.digest }}
-      version: ${{ needs.release.outputs.version }}
-    secrets: inherit
