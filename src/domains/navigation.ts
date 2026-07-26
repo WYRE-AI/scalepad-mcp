@@ -138,6 +138,9 @@ export async function handleNavigationCall(
           ].join("\n"),
         },
       ],
+      // Fleet contract (mcp-assert): status reports an error state when the
+      // server has no credentials, so monitors can detect a DOWN vendor.
+      ...(creds ? {} : { isError: true }),
     };
   }
 
