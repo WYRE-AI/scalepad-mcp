@@ -1,0 +1,13 @@
+# Keep the committed .npmrc (which references ${NODE_AUTH_TOKEN}) out of the
+# image: the builder stage writes its own temporary .npmrc from the
+# NODE_AUTH_TOKEN build-arg, and an env-referencing .npmrc with the variable
+# unset makes every later npm command (e.g. npm prune) fail.
+.npmrc
+node_modules
+dist
+coverage
+.git
+.github
+.env
+*.log
+.DS_Store
