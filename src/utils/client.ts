@@ -6,9 +6,30 @@
  * upfront. One ScalePad API key covers Core, Lifecycle Manager, ControlMap,
  * Backup Radar, and the hosted Quoter API; the optional Quoter OAuth pair is
  * only needed for the standalone api.quoter.com path.
+ *
+ * SECURITY (cross-tenant credential leak): per-request gateway credentials
+ * used to be held in module-level `let _clientOverride` / `let
+ * _credentialOverrides`, set synchronously by mcp-server.ts's tools/call
+ * handler before an `await` (creating the direct client) and cleared in a
+ * `finally` after the tool call resolved. In gateway (multi-tenant HTTP)
+ * mode this raced: tenant A's request sets its overrides and suspends on
+ * that await; before A resumes, tenant B's request runs — overwriting the
+ * overrides with B's client/credentials — and its own `finally` clears them
+ * back to null once B's call completes, all while A's tool call is still
+ * in flight. A then reads back either B's client or no override at all
+ * (falling through to a stale cached singleton or the operator's own env
+ * credentials) instead of its own.
+ *
+ * Fixed by scoping per-request client + credentials to an
+ * AsyncLocalStorage context (`runWithRequestClient`) instead of shared
+ * mutable module state. The context is isolated per call to `.run()` and
+ * needs no explicit clear — it simply falls out of scope when the wrapped
+ * callback returns (or throws), so concurrent requests can never observe
+ * or clobber each other's client/credentials.
  */
 
 import type { ScalePadClient } from "@wyre-technology/node-scalepad";
+import { AsyncLocalStorage } from "node:async_hooks";
 import { isValidRegion, getBaseUrlForRegion, type ScalePadRegion } from "./types.js";
 import { logger } from "./logger.js";
 
@@ -30,11 +51,17 @@ const CONFIG_PLACEHOLDER = /^\$\{.*\}$/;
 let _client: ScalePadClient | null = null;
 let _credentials: ScalePadCredentials | null = null;
 
-/** Per-request client override — takes priority over the cached singleton */
-let _clientOverride: ScalePadClient | null = null;
+interface RequestContext {
+  client: ScalePadClient;
+  credentials: ScalePadCredentials;
+}
 
-/** Per-request credential override — takes priority over env vars */
-let _credentialOverrides: ScalePadCredentials | null = null;
+/**
+ * Per-request client + credentials, isolated per gateway request. Takes
+ * priority over the module-level singleton/env vars below whenever a
+ * request is running inside `runWithRequestClient`.
+ */
+const requestContextStore = new AsyncLocalStorage<RequestContext>();
 
 /** Read an env var, treating blanks and unresolved placeholders as unset. */
 function readEnv(name: string): string | undefined {
@@ -60,41 +87,27 @@ export async function createClientDirect(
 }
 
 /**
- * Set a request-scoped client override.
- * While set, getClient() returns this instance instead of the cached one.
+ * Run `fn` with `client`/`credentials` bound to the async context for the
+ * duration of that callback — including anything it `await`s or schedules.
+ * Used by gateway (multi-tenant HTTP) mode, one call per request, so
+ * concurrent requests can never observe or clobber each other's client or
+ * credentials.
  */
-export function setClientOverride(client: ScalePadClient): void {
-  _clientOverride = client;
+export function runWithRequestClient<T>(
+  client: ScalePadClient,
+  credentials: ScalePadCredentials,
+  fn: () => T
+): T {
+  return requestContextStore.run({ client, credentials }, fn);
 }
 
 /**
- * Clear the request-scoped client override.
- */
-export function clearClientOverride(): void {
-  _clientOverride = null;
-}
-
-/**
- * Set request-scoped credential overrides.
- * While set, getCredentials() returns these instead of reading env vars.
- */
-export function setCredentialOverrides(creds: ScalePadCredentials): void {
-  _credentialOverrides = creds;
-}
-
-/**
- * Clear request-scoped credential overrides.
- */
-export function clearCredentialOverrides(): void {
-  _credentialOverrides = null;
-}
-
-/**
- * Get credentials from environment variables (or per-request overrides)
+ * Get credentials from environment variables (or the per-request context)
  */
 export function getCredentials(): ScalePadCredentials | null {
-  if (_credentialOverrides) {
-    return _credentialOverrides;
+  const requestContext = requestContextStore.getStore();
+  if (requestContext) {
+    return requestContext.credentials;
   }
 
   const apiKey = readEnv("SCALEPAD_API_KEY");
@@ -132,8 +145,9 @@ export function getCredentials(): ScalePadCredentials | null {
  * The cached singleton is invalidated whenever any credential field changes.
  */
 export async function getClient(): Promise<ScalePadClient> {
-  if (_clientOverride) {
-    return _clientOverride;
+  const requestContext = requestContextStore.getStore();
+  if (requestContext) {
+    return requestContext.client;
   }
 
   const creds = getCredentials();

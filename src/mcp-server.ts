@@ -19,17 +19,19 @@ import {
   handleNavigationCall,
   isNavigationTool,
 } from "./domains/navigation.js";
-import { isValidRegion, getBaseUrlForRegion, type DomainName } from "./utils/types.js";
+import {
+  isValidRegion,
+  getBaseUrlForRegion,
+  type DomainName,
+  type CallToolResult,
+} from "./utils/types.js";
 import {
   createClientDirect,
-  setClientOverride,
-  clearClientOverride,
-  setCredentialOverrides,
-  clearCredentialOverrides,
+  runWithRequestClient,
   type ScalePadCredentials,
 } from "./utils/client.js";
 import { logger } from "./utils/logger.js";
-import { setServerRef } from "./utils/server-ref.js";
+import { bindServerRef } from "./utils/server-ref.js";
 
 export type { ScalePadCredentials };
 
@@ -160,7 +162,7 @@ export function createMcpServer(
       },
     }
   );
-  setServerRef(server);
+  bindServerRef(server);
 
   server.setRequestHandler("tools/list", async () => {
     // Flat posture: every tool is exposed upfront.
@@ -171,51 +173,56 @@ export function createMcpServer(
     const { name, arguments: args } = request.params;
     logger.info("Tool call received", { tool: name });
 
-    if (credentialOverrides) {
-      setCredentialOverrides(credentialOverrides);
-      const directClient = await createClientDirect(credentialOverrides);
-      setClientOverride(directClient);
-    }
+    const dispatch = async (): Promise<CallToolResult> => {
+      try {
+        const toolArgs = (args ?? {}) as Record<string, unknown>;
 
-    try {
-      const toolArgs = (args ?? {}) as Record<string, unknown>;
-
-      if (isNavigationTool(name)) {
-        return await handleNavigationCall(name, toolArgs);
-      }
-
-      // Dispatch by tool-name prefix. Calls are accepted for any domain
-      // regardless of navigation state — navigation only shapes tools/list.
-      for (const [prefix, domain] of PREFIX_TO_DOMAIN) {
-        if (name.startsWith(prefix)) {
-          const handler = await getDomainHandler(domain);
-          return await handler.handleCall(name, toolArgs, extra);
+        if (isNavigationTool(name)) {
+          return await handleNavigationCall(name, toolArgs);
         }
-      }
 
-      return {
-        content: [
-          {
-            type: "text",
-            text: `Unknown tool: ${name}. Use scalepad_navigate to discover available tools by domain.`,
-          },
-        ],
-        isError: true,
-      };
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      const stack = error instanceof Error ? error.stack : undefined;
-      logger.error("Tool call failed", { tool: name, error: message, stack });
-      return {
-        content: [{ type: "text", text: `Error: ${message}` }],
-        isError: true,
-      };
-    } finally {
-      if (credentialOverrides) {
-        clearClientOverride();
-        clearCredentialOverrides();
+        // Dispatch by tool-name prefix. Calls are accepted for any domain
+        // regardless of navigation state — navigation only shapes tools/list.
+        for (const [prefix, domain] of PREFIX_TO_DOMAIN) {
+          if (name.startsWith(prefix)) {
+            const handler = await getDomainHandler(domain);
+            return await handler.handleCall(name, toolArgs, extra);
+          }
+        }
+
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Unknown tool: ${name}. Use scalepad_navigate to discover available tools by domain.`,
+            },
+          ],
+          isError: true,
+        };
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        const stack = error instanceof Error ? error.stack : undefined;
+        logger.error("Tool call failed", { tool: name, error: message, stack });
+        return {
+          content: [{ type: "text", text: `Error: ${message}` }],
+          isError: true,
+        };
       }
+    };
+
+    // Gateway mode: bind this request's client + credentials to an
+    // AsyncLocalStorage context for the lifetime of `dispatch()` — including
+    // every await inside it — so a concurrent request can never observe or
+    // clobber this one's client/credentials (see the SECURITY note in
+    // utils/client.ts). No explicit cleanup needed: the context falls out of
+    // scope when `dispatch()` settles, unlike the old set-then-clear-in-
+    // finally dance around a shared module-level override.
+    if (credentialOverrides) {
+      const directClient = await createClientDirect(credentialOverrides);
+      return runWithRequestClient(directClient, credentialOverrides, dispatch);
     }
+
+    return dispatch();
   });
 
   return server;
