@@ -22,7 +22,7 @@ jobs:
       packages: write
       id-token: write
       security-events: write
-    uses: WYRE-AI/.github/.github/workflows/mcp-server-release.yml@8c2360058e882a8afacfc4cebf840135789ef406
+    uses: WYRE-AI/reusable-workflows/.github/workflows/mcp-server-release.yml@2b0b056bd7544937e5cbd56cf2e1ff8a180a411f
     with:
       server-name: scalepad-mcp
       image-name: ghcr.io/wyre-ai/scalepad-mcp
