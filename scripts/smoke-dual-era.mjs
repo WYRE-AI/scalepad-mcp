@@ -133,17 +133,26 @@ async function modernEra() {
 async function main() {
   console.log(`Starting server on ${BASE} ...`);
   const child = spawn("node", [resolve(ROOT, "dist/index.js")], {
-    env: {
-      ...process.env,
-      MCP_TRANSPORT: "http",
-      MCP_HTTP_PORT: String(PORT),
-      MCP_HTTP_HOST: "127.0.0.1",
-      AUTH_MODE: "env",
-      // Dummy value for every required credential field (apiKey is the only
-      // required ScalePad field; region + Quoter OAuth are optional).
-      SCALEPAD_API_KEY: "smoke-dummy-key",
-      SCALEPAD_REGION: "us",
-    },
+    env: (() => {
+      const env = {
+        ...process.env,
+        MCP_TRANSPORT: "http",
+        MCP_HTTP_PORT: String(PORT),
+        MCP_HTTP_HOST: "127.0.0.1",
+        AUTH_MODE: "env",
+        // Local smoke only. HTTP refuses to start without a real
+        // CONDUIT_S2S_SECRET; this flag skips X-Gateway-S2S and is limited
+        // to loopback. Drop any inherited secret so the client does not
+        // have to sign requests.
+        MCP_ALLOW_INSECURE_DEV: "1",
+        // Dummy value for every required credential field (apiKey is the only
+        // required ScalePad field; region + Quoter OAuth are optional).
+        SCALEPAD_API_KEY: "smoke-dummy-key",
+        SCALEPAD_REGION: "us",
+      };
+      delete env.CONDUIT_S2S_SECRET;
+      return env;
+    })(),
     stdio: ["ignore", "inherit", "inherit"],
   });
 

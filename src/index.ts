@@ -27,11 +27,20 @@
  * - X-ScalePad-Region       (optional)
  * - X-Quoter-Client-Id      (optional)
  * - X-Quoter-Client-Secret  (optional)
+ *
+ * Gateway mode never falls back to SCALEPAD_* env credentials.
+ *
+ * HTTP transport refuses to start unless CONDUIT_S2S_SECRET is a real secret
+ * (empty and known placeholders are rejected). MCP_ALLOW_INSECURE_DEV=1 is a
+ * local-only escape hatch for an empty secret: it logs a warning and forces
+ * the listener onto 127.0.0.1. A configured secret honors MCP_HTTP_HOST,
+ * which defaults to 127.0.0.1 when unset. /health and /healthz stay
+ * unauthenticated and do not read credentials. stdio does not use S2S auth.
  */
 
 import { serveStdio } from "@modelcontextprotocol/server/stdio";
 import { createMcpServer } from "./mcp-server.js";
-import { createHttpLayer } from "./http.js";
+import { startHttpTransport } from "./http.js";
 import { logger } from "./utils/logger.js";
 
 /**
@@ -47,39 +56,6 @@ function startStdioTransport(): void {
 }
 
 /**
- * Start the server with HTTP serving via the shared HTTP layer.
- * The MCP handler is created once; its factory runs per request (stateless).
- */
-async function startHttpTransport(): Promise<void> {
-  const port = parseInt(process.env.MCP_HTTP_PORT || "8080", 10);
-  const host = process.env.MCP_HTTP_HOST || "0.0.0.0";
-  const isGatewayMode = process.env.AUTH_MODE === "gateway";
-
-  const layer = createHttpLayer({ gatewayMode: isGatewayMode });
-
-  await new Promise<void>((resolve) => {
-    layer.httpServer.listen(port, host, () => {
-      logger.info(`ScalePad MCP server listening on http://${host}:${port}/mcp`);
-      logger.info(`Health check available at http://${host}:${port}/health`);
-      logger.info(
-        `Authentication mode: ${isGatewayMode ? "gateway (header-based)" : "env (environment variables)"}`
-      );
-      resolve();
-    });
-  });
-
-  // Graceful shutdown
-  const shutdown = async () => {
-    logger.info("Shutting down ScalePad MCP server...");
-    await layer.close();
-    process.exit(0);
-  };
-
-  process.on("SIGINT", shutdown);
-  process.on("SIGTERM", shutdown);
-}
-
-/**
  * Main entry point - select transport based on MCP_TRANSPORT env var
  */
 async function main() {
@@ -91,7 +67,14 @@ async function main() {
   });
 
   if (transportType === "http") {
-    await startHttpTransport();
+    const layer = await startHttpTransport();
+    const shutdown = async () => {
+      logger.info("Shutting down ScalePad MCP server...");
+      await layer.close();
+      process.exit(0);
+    };
+    process.on("SIGINT", shutdown);
+    process.on("SIGTERM", shutdown);
   } else {
     startStdioTransport();
   }
