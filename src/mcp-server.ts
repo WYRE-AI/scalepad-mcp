@@ -11,6 +11,7 @@
  * is a discovery aid, not a gate.
  */
 
+import { AsyncLocalStorage } from "node:async_hooks";
 import { Server } from "@modelcontextprotocol/server";
 import type { McpServerFactory, Tool } from "@modelcontextprotocol/server";
 import { getAvailableDomains, getDomainHandler } from "./domains/index.js";
@@ -113,16 +114,28 @@ export function resolveGatewayCredentials(
 }
 
 /**
+ * Credentials the HTTP layer already accepted for this request. The factory
+ * prefers this over re-reading headers, and never over process.env.
+ */
+const gatewayRequestCredentials = new AsyncLocalStorage<ScalePadCredentials>();
+
+/** Bind gateway credentials for the duration of one HTTP MCP request. */
+export function runWithGatewayCredentials<T>(creds: ScalePadCredentials, fn: () => T): T {
+  return gatewayRequestCredentials.run(creds, fn);
+}
+
+/**
  * Bind `createMcpServer` into the `McpServerFactory` shape the v2 HTTP serving
  * entry (`createMcpHandler`) consumes. The factory runs once per HTTP request
  * — the fresh-instance-per-request stateless idiom — for BOTH protocol eras
  * (legacy 2025 traffic and modern 2026-07-28 envelope traffic).
  *
- * In gateway mode the request's X-ScalePad-* / X-Quoter-* headers are read
- * from `ctx.requestInfo`, keeping credentials bound per request. Missing
- * headers are answered 401 by the HTTP layer before serving ever starts; if a
- * request slips through without them, tools/call reports the credential error
- * in-band.
+ * In gateway mode credentials come from the HTTP layer's per-request store
+ * (the headers it already validated). Header re-read from `ctx.requestInfo`
+ * is only a backup. Missing headers are answered 401 by the HTTP layer before
+ * serving ever starts; if a request slips through without them, tools/call
+ * reports the credential error in-band and does not read SCALEPAD_* from the
+ * environment.
  */
 export function makeMcpServerFactory(options: {
   gatewayMode: boolean;
@@ -130,9 +143,13 @@ export function makeMcpServerFactory(options: {
 }): McpServerFactory {
   return (ctx) => {
     if (options.gatewayMode) {
-      const { creds } = resolveGatewayCredentials(
-        (name) => ctx.requestInfo?.headers.get(name) ?? undefined
-      );
+      const bound = gatewayRequestCredentials.getStore();
+      const creds =
+        bound ??
+        resolveGatewayCredentials(
+          (name) => ctx.requestInfo?.headers.get(name) ?? undefined
+        ).creds;
+      if (!creds) return createMcpServer(undefined, { disallowEnvFallback: true });
       return createMcpServer(creds);
     }
     return createMcpServer(options.envCredentials);
@@ -149,7 +166,8 @@ export function makeMcpServerFactory(options: {
  *   with per-request credentials (cross-tenant leak).
  */
 export function createMcpServer(
-  credentialOverrides?: ScalePadCredentials
+  credentialOverrides?: ScalePadCredentials,
+  options?: { disallowEnvFallback?: boolean }
 ): Server {
   const server = new Server(
     {
@@ -169,8 +187,21 @@ export function createMcpServer(
     return { tools: [...getNavigationTools(), ...(await getAllDomainTools())] };
   });
 
+  const disallowEnvFallback = options?.disallowEnvFallback === true;
+
   server.setRequestHandler("tools/call", async (request, extra) => {
     const { name, arguments: args } = request.params;
+    if (disallowEnvFallback && !credentialOverrides) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: "Error: Unauthorized: missing required gateway credential header X-ScalePad-Api-Key.",
+          },
+        ],
+        isError: true,
+      };
+    }
     logger.info("Tool call received", { tool: name });
 
     const dispatch = async (): Promise<CallToolResult> => {

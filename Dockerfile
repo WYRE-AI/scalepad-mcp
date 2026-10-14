@@ -64,6 +64,9 @@ ENV NODE_ENV=production
 ENV LOG_LEVEL=info
 ENV MCP_TRANSPORT=http
 ENV MCP_HTTP_PORT=8080
+# Bind every interface inside the container. Host publish is loopback in
+# docker-compose. Startup still refuses to run unless CONDUIT_S2S_SECRET is a
+# real secret (empty and known placeholders are rejected).
 ENV MCP_HTTP_HOST=0.0.0.0
 # Hosted deployment default: credentials arrive per-request via X-ScalePad-* /
 # X-Quoter-* headers. Set AUTH_MODE=env for single-tenant/local use with
