@@ -31,6 +31,7 @@ import {
   runWithRequestClient,
   type ScalePadCredentials,
 } from "./utils/client.js";
+import { formatToolError } from "./utils/errors.js";
 import { logger } from "./utils/logger.js";
 import { bindServerRef } from "./utils/server-ref.js";
 
@@ -235,7 +236,7 @@ export function createMcpServer(
         const stack = error instanceof Error ? error.stack : undefined;
         logger.error("Tool call failed", { tool: name, error: message, stack });
         return {
-          content: [{ type: "text", text: `Error: ${message}` }],
+          content: [{ type: "text", text: formatToolError(error, name) }],
           isError: true,
         };
       }

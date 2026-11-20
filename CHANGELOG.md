@@ -17,3 +17,11 @@ Releases are cut by semantic-release from conventional commits.
 - Shared utilities: stderr-only structured logger, lazy SDK client with per-request overrides and cache invalidation, server-ref, and elicitation helpers.
 - Dual-era smoke script (`scripts/smoke-dual-era.mjs`), SSE-aware test helper, and a vitest suite for the HTTP layer (health, 401 gate, dual-era `tools/list`).
 - Fleet packaging: multi-stage `node:22-alpine` Dockerfile (non-root, `AUTH_MODE=gateway` default), thin-caller release workflow, mcp-assert workflow, semantic-release config (`npmPublish: false`).
+
+### Changed
+
+- Tool errors now report the HTTP status and a scrubbed copy of the vendor's error message (`Error (HTTP 422): ...`) instead of the SDK's generic `HTTP <status>` text (WYREAI-801). Credentials are redacted, control characters are stripped, and messages are truncated to 300 characters. The Lifecycle Manager no-budget 422 on `scalepad_lm_budget_*` tools is mapped to a plain "No budget is configured for this client" message.
+
+### Fixed
+
+- Backup Radar tools now return a clear "not available in the '<region>' region" error for the `ca` and `au` regions instead of an opaque "Resource not found" from the regional endpoint (WYREAI-806). Supported regions remain `us` and `eu`.
