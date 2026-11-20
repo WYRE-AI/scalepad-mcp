@@ -11,9 +11,13 @@
 import type { Tool } from "@modelcontextprotocol/server";
 import type { ScalePadClient } from "@wyre-technology/node-scalepad";
 import type { DomainHandler, CallToolResult } from "../utils/types.js";
-import { getClient } from "../utils/client.js";
+import { getClient, getCredentials } from "../utils/client.js";
+import type { ScalePadRegion } from "../utils/types.js";
 import { logger } from "../utils/logger.js";
 import { elicitText } from "../utils/elicitation.js";
+
+/** Regions that serve Backup Radar (ca and au do not). */
+const SUPPORTED_REGIONS: readonly ScalePadRegion[] = ["us", "eu"];
 
 interface ToolDef {
   tool: Tool;
@@ -183,6 +187,21 @@ async function handleCall(
     return {
       content: [
         { type: "text", text: `Unknown Backup Radar tool: ${toolName}` },
+      ],
+      isError: true,
+    };
+  }
+
+  // Backup Radar is only served from some regions. Fail with a clear message
+  // instead of letting the regional endpoint answer 404 "Resource not found".
+  const region = getCredentials()?.region;
+  if (region && !SUPPORTED_REGIONS.includes(region)) {
+    return {
+      content: [
+        {
+          type: "text",
+          text: `Backup Radar is not available in the '${region}' region (supported: ${SUPPORTED_REGIONS.join(", ")}). Set SCALEPAD_REGION / X-ScalePad-Region to a supported region.`,
+        },
       ],
       isError: true,
     };

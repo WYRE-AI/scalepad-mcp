@@ -1,15 +1,23 @@
 /**
  * Tests for the Backup Radar domain handler.
  */
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
 import { handler } from "./backup-radar.js";
-import { getClient } from "../utils/client.js";
+import { getClient, getCredentials } from "../utils/client.js";
 
 vi.mock("../utils/client.js", () => ({
   getClient: vi.fn(),
+  getCredentials: vi.fn(),
 }));
 
 const mockedGetClient = vi.mocked(getClient);
+const mockedGetCredentials = vi.mocked(getCredentials);
+
+function withRegion(region: "us" | "eu" | "ca" | "au" | null) {
+  mockedGetCredentials.mockReturnValue(
+    region ? ({ apiKey: "k", region, baseUrl: "" } as never) : null
+  );
+}
 
 describe("backup-radar domain", () => {
   describe("getTools", () => {
@@ -42,6 +50,11 @@ describe("backup-radar domain", () => {
   });
 
   describe("handleCall", () => {
+    beforeEach(() => {
+      vi.clearAllMocks();
+      withRegion("us");
+    });
+
     it("dispatches scalepad_br_backups_get_health through brBackups.getHealth", async () => {
       const getHealth = vi.fn().mockResolvedValue({ id: "c-1", healthy: 12 });
       mockedGetClient.mockResolvedValue({ brBackups: { getHealth } } as never);
@@ -81,6 +94,43 @@ describe("backup-radar domain", () => {
       // No server ref in unit tests -> elicitation returns null -> original behavior.
       expect(listHealth).toHaveBeenCalledWith({});
       expect(result.isError).toBeUndefined();
+    });
+
+    it.each(["ca", "au"] as const)(
+      "returns a clear 'not available' error in the %s region without calling the API",
+      async (region) => {
+        withRegion(region);
+        const listDevices = vi.fn();
+        mockedGetClient.mockResolvedValue({ brBackups: { listDevices } } as never);
+
+        const result = await handler.handleCall("scalepad_br_backups_list_devices", {});
+
+        expect(result.isError).toBe(true);
+        expect(result.content[0].text).toContain(`not available in the '${region}' region`);
+        expect(result.content[0].text).toContain("us, eu");
+        expect(mockedGetClient).not.toHaveBeenCalled();
+        expect(listDevices).not.toHaveBeenCalled();
+      }
+    );
+
+    it("serves the eu region", async () => {
+      withRegion("eu");
+      const listDevices = vi.fn().mockResolvedValue({ data: [] });
+      mockedGetClient.mockResolvedValue({ brBackups: { listDevices } } as never);
+
+      const result = await handler.handleCall("scalepad_br_backups_list_devices", {});
+
+      expect(listDevices).toHaveBeenCalled();
+      expect(result.isError).toBeUndefined();
+    });
+
+    it("defers to getClient (credential error) when no credentials are configured", async () => {
+      withRegion(null);
+      mockedGetClient.mockRejectedValue(new Error("No API credentials provided."));
+
+      await expect(
+        handler.handleCall("scalepad_br_backups_list_devices", {})
+      ).rejects.toThrow("No API credentials provided.");
     });
 
     it("returns isError for unknown tools", async () => {
