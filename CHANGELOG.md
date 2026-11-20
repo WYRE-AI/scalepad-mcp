@@ -20,7 +20,7 @@ Releases are cut by semantic-release from conventional commits.
 
 ### Changed
 
-- Tool errors now report the HTTP status and a scrubbed copy of the vendor's error message (`Error (HTTP 422): ...`) instead of the SDK's generic `HTTP <status>` text (WYREAI-801). Credentials are redacted, control characters are stripped, and messages are truncated to 300 characters. The Lifecycle Manager no-budget 422 on `scalepad_lm_budget_*` tools is mapped to a plain "No budget is configured for this client" message.
+- Tool errors now report the HTTP status and a scrubbed copy of the vendor's error message (`Error (HTTP 422): ...`) instead of the SDK's generic `HTTP <status>` text (WYREAI-801). Credentials (API keys, access/refresh tokens, client secrets, passwords, `Authorization` values including Basic/Bearer schemes) are redacted, control characters are stripped, and messages are truncated to 300 characters. OAuth `error_description` and field-keyed validation maps are surfaced, and the real 5xx status is reported where the SDK hard-codes 500. A Lifecycle Manager 422 on `scalepad_lm_budget_*` tools is mapped to a plain "No budget is configured for this client" message only when the vendor message is missing, generic, or mentions budget; input-validation errors keep their own message.
 
 ### Fixed
 

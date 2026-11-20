@@ -47,7 +47,47 @@ describe("formatToolError", () => {
   it("maps the Lifecycle Manager no-budget 422 to a plain message", () => {
     const err = new ScalePadError("HTTP 422", 422, { message: "Unprocessable Entity" });
     const text = formatToolError(err, "scalepad_lm_budget_summary_get");
-    expect(text).toContain("Error (HTTP 422): No budget is configured for this client");
+    expect(text).toBe(
+      "Error (HTTP 422): No budget is configured for this client in Lifecycle Manager. Vendor message: Unprocessable Entity"
+    );
+  });
+
+  it("maps a budget-tool 422 with no vendor message to the no-budget text", () => {
+    const err = new ScalePadError("HTTP 422", 422, undefined);
+    expect(formatToolError(err, "scalepad_lm_budget_summary_get")).toBe(
+      "Error (HTTP 422): No budget is configured for this client in Lifecycle Manager."
+    );
+  });
+
+  it("does not remap a budget-tool 422 that is a field-validation error", () => {
+    const err = new ScalePadError("HTTP 422", 422, { message: "starting_date must be a date" });
+    expect(formatToolError(err, "scalepad_lm_budget_summary_get")).toBe(
+      "Error (HTTP 422): starting_date must be a date"
+    );
+  });
+
+  it("reads OAuth-style error_description in preference to error", () => {
+    const err = new ScalePadError("Bad request", 400, {
+      error: "invalid_request",
+      error_description: "client_id is missing",
+    });
+    expect(formatToolError(err)).toBe("Error (HTTP 400): Bad request: client_id is missing");
+  });
+
+  it("joins field-keyed validation maps as key: message", () => {
+    const err = new ScalePadError("Bad request", 400, {
+      errors: { page_size: ["too big"], cursor: "is invalid" },
+    });
+    expect(formatToolError(err)).toBe(
+      "Error (HTTP 400): Bad request: page_size: too big; cursor: is invalid"
+    );
+  });
+
+  it("reports the real 5xx status the SDK's ServerError hard-codes as 500", () => {
+    const err = new ScalePadError("Server error: 503", 500, "Service Unavailable");
+    expect(formatToolError(err)).toBe(
+      "Error (HTTP 503): Server error: 503: Service Unavailable"
+    );
   });
 
   it("does not apply the no-budget mapping to other tools or statuses", () => {
@@ -72,6 +112,18 @@ describe("formatToolError", () => {
 });
 
 describe("scrubVendorMessage", () => {
+  it.each([
+    ["access_token=abc123SECRET", "abc123SECRET"],
+    ["refresh_token: abc123SECRET", "abc123SECRET"],
+    ["client_secret=abc123SECRET", "abc123SECRET"],
+    ["clientSecret: abc123SECRET", "abc123SECRET"],
+    ["Authorization: Basic dXNlcjpwYXNzd29yZA==", "dXNlcjpwYXNzd29yZA=="],
+  ])("redacts %s", (input, secret) => {
+    const out = scrubVendorMessage(input);
+    expect(out).not.toContain(secret);
+    expect(out).toContain("[redacted]");
+  });
+
   it("collapses control characters and whitespace", () => {
     expect(scrubVendorMessage("line1\n\tline2\u0000  line3")).toBe("line1 line2 line3");
   });
