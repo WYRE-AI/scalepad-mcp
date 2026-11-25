@@ -50,6 +50,9 @@ COPY --from=builder /app/node_modules ./node_modules
 RUN mkdir -p /app/logs && chown -R scalepad:scalepad /app
 
 # Switch to non-root user
+# Remove the bundled npm CLI (unused at runtime; its vendored deps trigger scanner alerts)
+RUN rm -rf /usr/local/lib/node_modules/npm /usr/local/bin/npm /usr/local/bin/npx
+
 USER scalepad
 
 # Expose port for HTTP transport
